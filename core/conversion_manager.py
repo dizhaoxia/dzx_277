@@ -253,3 +253,80 @@ class ConversionManager:
             return img
         except Exception:
             return None
+
+    def estimate_stitch_size(self,
+                             pdf_item: PdfItem,
+                             conversion_settings: ConversionSettings,
+                             export_settings: ExportSettings) -> Optional[dict]:
+        try:
+            if not export_settings.stitch_settings.enabled:
+                return None
+
+            parser = PdfParser(pdf_item.file_path)
+            if not parser.open(pdf_item.password):
+                return None
+
+            total_pages = parser.page_count
+            pages_to_export = PageRangeParser.parse(
+                export_settings.page_range, total_pages
+            )
+
+            if not pages_to_export:
+                parser.close()
+                return None
+
+            dpi = conversion_settings.dpi
+            stitch_settings = export_settings.stitch_settings
+            gap = stitch_settings.gap
+
+            widths = []
+            heights = []
+            for page_num in pages_to_export:
+                w_pt, h_pt = parser.get_page_size_pt(page_num - 1)
+                w_px = int(w_pt / 72 * dpi)
+                h_px = int(h_pt / 72 * dpi)
+                widths.append(w_px)
+                heights.append(h_px)
+
+            parser.close()
+
+            num_pages = len(pages_to_export)
+            total_gap = gap * (num_pages - 1)
+
+            if stitch_settings.direction == StitchDirection.VERTICAL:
+                max_width = max(widths)
+                total_height = sum(heights) + total_gap
+                final_width = max_width
+                final_height = total_height
+            else:
+                max_height = max(heights)
+                total_width = sum(widths) + total_gap
+                final_width = total_width
+                final_height = max_height
+
+            max_dim = max(final_width, final_height)
+            fmt = conversion_settings.output_format
+
+            warnings = []
+            if fmt == OutputFormat.JPG and max_dim > 65000:
+                warnings.append(
+                    f"JPG 格式最大支持 65535 像素，预估尺寸 {max_dim} 像素超出限制"
+                )
+            if fmt == OutputFormat.WEBP and max_dim > 16383:
+                warnings.append(
+                    f"WebP 格式最大支持 16383 像素，预估尺寸 {max_dim} 像素超出限制"
+                )
+            if max_dim > 30000:
+                warnings.append(
+                    f"预估尺寸过大 ({final_width}x{final_height})，可能导致保存失败或内存不足"
+                )
+
+            return {
+                "width": final_width,
+                "height": final_height,
+                "pages": num_pages,
+                "warnings": warnings
+            }
+
+        except Exception:
+            return None

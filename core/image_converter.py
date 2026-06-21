@@ -125,18 +125,68 @@ class ImageConverter:
 
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
+        max_dimension = max(img.width, img.height)
+        if max_dimension > 30000:
+            import warnings
+            warnings.warn(f"图片尺寸过大 ({img.width}x{img.height})，可能导致保存失败")
+
         save_kwargs = {}
         if fmt == OutputFormat.PNG:
-            save_kwargs["optimize"] = True
+            if max_dimension > 30000:
+                save_kwargs["optimize"] = False
+                save_kwargs["compress_level"] = 1
+            else:
+                save_kwargs["optimize"] = True
         elif fmt == OutputFormat.JPG:
             save_kwargs["quality"] = settings.jpg_quality
-            save_kwargs["optimize"] = True
-            save_kwargs["progressive"] = True
+            if max_dimension > 65000:
+                raise ValueError(
+                    f"JPG 格式不支持超过 65535 像素的尺寸 "
+                    f"(当前: {img.width}x{img.height})。"
+                    f"请降低 DPI 或减少拼接页数，或使用 PNG/WebP 格式。"
+                )
+            elif max_dimension > 30000:
+                save_kwargs["optimize"] = False
+                save_kwargs["progressive"] = False
+            else:
+                save_kwargs["optimize"] = True
+                save_kwargs["progressive"] = True
         elif fmt == OutputFormat.WEBP:
             save_kwargs["quality"] = settings.webp_quality
-            save_kwargs["method"] = 6
+            if max_dimension > 16383:
+                raise ValueError(
+                    f"WebP 格式不支持超过 16383 像素的尺寸 "
+                    f"(当前: {img.width}x{img.height})。"
+                    f"请降低 DPI 或减少拼接页数，或使用 PNG 格式。"
+                )
+            elif max_dimension > 8000:
+                save_kwargs["method"] = 3
+            else:
+                save_kwargs["method"] = 6
 
-        img.save(output_path, **save_kwargs)
+        try:
+            img.save(output_path, **save_kwargs)
+        except (IOError, OSError, ValueError) as e:
+            if "broken data stream" in str(e).lower() or "image file" in str(e).lower():
+                retry_kwargs = dict(save_kwargs)
+                retry_kwargs.pop("optimize", None)
+                retry_kwargs.pop("progressive", None)
+                retry_kwargs.pop("method", None)
+                retry_kwargs.pop("compress_level", None)
+                if fmt == OutputFormat.JPG and "quality" not in retry_kwargs:
+                    retry_kwargs["quality"] = settings.jpg_quality
+                elif fmt == OutputFormat.WEBP and "quality" not in retry_kwargs:
+                    retry_kwargs["quality"] = settings.webp_quality
+                try:
+                    img.save(output_path, **retry_kwargs)
+                except Exception as e2:
+                    raise RuntimeError(
+                        f"图片保存失败（尺寸: {img.width}x{img.height}）。"
+                        f"建议降低 DPI 或减少拼接页数。\n"
+                        f"错误: {str(e2)}"
+                    ) from e2
+            else:
+                raise
 
         file_size = os.path.getsize(output_path)
 

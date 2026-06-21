@@ -381,6 +381,35 @@ class MainWindow(QMainWindow):
             self.tab_widget.setCurrentIndex(1)
             return
 
+        if self._stitch_settings.enabled:
+            all_warnings = []
+            manager = ConversionManager()
+            for item in pdf_items:
+                export_settings = ExportSettings(
+                    output_dir=self._export_settings.output_dir,
+                    naming_template=self._export_settings.naming_template,
+                    page_range=self._export_settings.page_range,
+                    create_subfolder=self._export_settings.create_subfolder,
+                    stitch_settings=self._stitch_settings
+                )
+                size_info = manager.estimate_stitch_size(
+                    item, self._conversion_settings, export_settings
+                )
+                if size_info and size_info["warnings"]:
+                    for warning in size_info["warnings"]:
+                        all_warnings.append(f"• {item.file_name}: {warning}")
+
+            if all_warnings:
+                msg = "以下文件可能存在转换问题：\n\n" + "\n".join(all_warnings)
+                msg += "\n\n建议降低 DPI 或减少拼接页数，或使用 PNG 格式。\n\n是否继续转换？"
+                reply = QMessageBox.warning(
+                    self, "尺寸警告", msg,
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No
+                )
+                if reply != QMessageBox.StandardButton.Yes:
+                    return
+
         tasks = []
         for item in pdf_items:
             export_settings = ExportSettings(

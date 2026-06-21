@@ -278,9 +278,6 @@ class ImportPanel(QWidget):
             self._add_files(files)
 
     def _on_paste_clicked(self):
-        clipboard = self.window().screen().virtualSiblingAt(self.pos()). \
-            application.clipboard() if hasattr(self.window(), 'screen') else None
-
         from PyQt6.QtWidgets import QApplication
         clipboard = QApplication.clipboard()
         text = clipboard.text()
@@ -290,6 +287,8 @@ class ImportPanel(QWidget):
                 self._add_files(paths)
             else:
                 QMessageBox.information(self, "提示", "剪贴板中没有有效的文件路径")
+        else:
+            QMessageBox.information(self, "提示", "剪贴板中没有有效的文件路径")
 
     def _on_path_input_return(self):
         text = self.path_input.text()
