@@ -1,5 +1,6 @@
 import os
 from typing import Optional
+from copy import copy
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QPushButton, QProgressBar, QLabel, QMessageBox, QTabWidget,
@@ -14,6 +15,9 @@ from ui.export_panel import ExportPanel
 from ui.stitch_panel import StitchPanel
 from ui.preview_panel import PreviewPanel
 from ui.password_dialog import PasswordDialog
+from ui.filter_panel import FilterChainPanel
+from ui.watermark_panel import WatermarkPanel
+from ui.crop_panel import CropPanel
 
 from core.conversion_manager import (
     ConversionManager, ConversionTask, PdfItem,
@@ -236,14 +240,23 @@ class MainWindow(QMainWindow):
         self.settings_panel = SettingsPanel()
         self.export_panel = ExportPanel()
         self.stitch_panel = StitchPanel()
+        self.filter_panel = FilterChainPanel()
+        self.watermark_panel = WatermarkPanel()
+        self.crop_panel = CropPanel()
 
         scroll_settings = self._wrap_in_scroll(self.settings_panel)
         scroll_export = self._wrap_in_scroll(self.export_panel)
         scroll_stitch = self._wrap_in_scroll(self.stitch_panel)
+        scroll_filter = self._wrap_in_scroll(self.filter_panel)
+        scroll_watermark = self._wrap_in_scroll(self.watermark_panel)
+        scroll_crop = self._wrap_in_scroll(self.crop_panel)
 
         self.tab_widget.addTab(scroll_settings, "参数设置")
         self.tab_widget.addTab(scroll_export, "导出设置")
         self.tab_widget.addTab(scroll_stitch, "长图拼接")
+        self.tab_widget.addTab(scroll_filter, "滤镜增强")
+        self.tab_widget.addTab(scroll_watermark, "水印设置")
+        self.tab_widget.addTab(scroll_crop, "裁剪白边")
 
         layout.addWidget(self.tab_widget)
 
@@ -265,6 +278,9 @@ class MainWindow(QMainWindow):
         self.settings_panel.settingsChanged.connect(self._on_settings_changed)
         self.export_panel.settingsChanged.connect(self._on_export_settings_changed)
         self.stitch_panel.settingsChanged.connect(self._on_stitch_settings_changed)
+        self.filter_panel.settingsChanged.connect(self._on_filter_settings_changed)
+        self.watermark_panel.settingsChanged.connect(self._on_watermark_settings_changed)
+        self.crop_panel.settingsChanged.connect(self._on_crop_settings_changed)
 
         self.preview_panel.pageChanged.connect(self._on_page_changed)
 
@@ -345,6 +361,21 @@ class MainWindow(QMainWindow):
         if self._current_pdf and self._current_pdf.is_loaded:
             self._update_preview()
 
+    def _on_filter_settings_changed(self, filter_chain):
+        self._export_settings.filter_chain = filter_chain
+        if self._current_pdf and self._current_pdf.is_loaded:
+            self._update_preview()
+
+    def _on_watermark_settings_changed(self, watermark_settings):
+        self._export_settings.watermark_settings = watermark_settings
+        if self._current_pdf and self._current_pdf.is_loaded:
+            self._update_preview()
+
+    def _on_crop_settings_changed(self, crop_settings):
+        self._export_settings.crop_settings = crop_settings
+        if self._current_pdf and self._current_pdf.is_loaded:
+            self._update_preview()
+
     def _on_page_changed(self, page: int):
         self._current_page = page
         self._do_update_preview()
@@ -360,7 +391,8 @@ class MainWindow(QMainWindow):
 
         result = manager.preview_both(
             self._current_pdf, self._current_page - 1,
-            self._conversion_settings
+            self._conversion_settings,
+            self._export_settings
         )
 
         if result is None:
@@ -384,6 +416,11 @@ class MainWindow(QMainWindow):
             )
 
         self.preview_panel.set_images(original_img, output_img, output_info)
+
+    def _get_full_export_settings(self) -> ExportSettings:
+        settings = copy(self._export_settings)
+        settings.stitch_settings = copy(self._stitch_settings)
+        return settings
 
     def _on_start_clicked(self):
         if self._worker and self._worker.isRunning():
@@ -412,13 +449,7 @@ class MainWindow(QMainWindow):
             manager = ConversionManager()
 
             if stitch_mode == OutputMode.CROSS_FILE_LONG_IMAGE:
-                export_settings = ExportSettings(
-                    output_dir=self._export_settings.output_dir,
-                    naming_template=self._export_settings.naming_template,
-                    page_range=self._export_settings.page_range,
-                    create_subfolder=self._export_settings.create_subfolder,
-                    stitch_settings=self._stitch_settings
-                )
+                export_settings = self._get_full_export_settings()
                 size_info = manager.estimate_cross_file_stitch_size(
                     pdf_items, self._conversion_settings, export_settings
                 )
@@ -431,13 +462,7 @@ class MainWindow(QMainWindow):
                         )
             else:
                 for item in pdf_items:
-                    export_settings = ExportSettings(
-                        output_dir=self._export_settings.output_dir,
-                        naming_template=self._export_settings.naming_template,
-                        page_range=self._export_settings.page_range,
-                        create_subfolder=self._export_settings.create_subfolder,
-                        stitch_settings=self._stitch_settings
-                    )
+                    export_settings = self._get_full_export_settings()
                     if stitch_mode == OutputMode.THUMBNAIL_GRID:
                         size_info = manager.estimate_grid_size(
                             item, self._conversion_settings, export_settings
@@ -463,13 +488,7 @@ class MainWindow(QMainWindow):
 
         tasks = []
         for item in pdf_items:
-            export_settings = ExportSettings(
-                output_dir=self._export_settings.output_dir,
-                naming_template=self._export_settings.naming_template,
-                page_range=self._export_settings.page_range,
-                create_subfolder=self._export_settings.create_subfolder,
-                stitch_settings=self._stitch_settings
-            )
+            export_settings = self._get_full_export_settings()
             task = ConversionTask(item, self._conversion_settings, export_settings)
             tasks.append(task)
 

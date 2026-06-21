@@ -12,6 +12,9 @@ from .image_stitcher import (
     ImageStitcher, StitchDirection, BackgroundColor,
     WidthStrategy, HeightStrategy
 )
+from .image_processor import (
+    FilterChain, WatermarkSettings, CropSettings, ImageProcessor
+)
 from enum import Enum
 from .file_namer import PageRangeParser, NamingTemplate, OutputOrganizer
 
@@ -64,6 +67,9 @@ class ExportSettings:
     page_range: str = ""
     create_subfolder: bool = True
     stitch_settings: StitchSettings = field(default_factory=StitchSettings)
+    filter_chain: FilterChain = field(default_factory=FilterChain)
+    watermark_settings: WatermarkSettings = field(default_factory=WatermarkSettings)
+    crop_settings: CropSettings = field(default_factory=CropSettings)
 
 
 @dataclass
@@ -160,6 +166,13 @@ class ConversionManager:
                         img, task.conversion_settings.color_space
                     )
 
+                    img = ImageProcessor.process_full_pipeline(
+                        img,
+                        filter_chain=task.export_settings.filter_chain,
+                        crop_settings=task.export_settings.crop_settings,
+                        watermark_settings=task.export_settings.watermark_settings
+                    )
+
                     file_name = NamingTemplate.generate(
                         task.export_settings.naming_template,
                         task.pdf_item.file_name,
@@ -210,6 +223,13 @@ class ConversionManager:
 
                 stitched = ImageConverter.convert_color_space(
                     stitched, task.conversion_settings.color_space
+                )
+
+                stitched = ImageProcessor.process_full_pipeline(
+                    stitched,
+                    filter_chain=task.export_settings.filter_chain,
+                    crop_settings=task.export_settings.crop_settings,
+                    watermark_settings=task.export_settings.watermark_settings
                 )
 
                 file_name = NamingTemplate.generate(
@@ -280,7 +300,8 @@ class ConversionManager:
     def preview_converted(self,
                           pdf_item: PdfItem,
                           page_num: int,
-                          settings: ConversionSettings) -> Optional[Image.Image]:
+                          settings: ConversionSettings,
+                          export_settings: Optional[ExportSettings] = None) -> Optional[Image.Image]:
         parser = None
         try:
             parser = PdfParser(pdf_item.file_path)
@@ -293,6 +314,15 @@ class ConversionManager:
                 return None
 
             img = ImageConverter.convert_color_space(img, settings.color_space)
+
+            if export_settings:
+                img = ImageProcessor.process_full_pipeline(
+                    img,
+                    filter_chain=export_settings.filter_chain,
+                    crop_settings=export_settings.crop_settings,
+                    watermark_settings=export_settings.watermark_settings
+                )
+
             img = ImageConverter.prepare_for_format(img, settings.output_format)
 
             return img
@@ -308,7 +338,8 @@ class ConversionManager:
     def preview_both(self,
                      pdf_item: PdfItem,
                      page_num: int,
-                     settings: ConversionSettings) -> Optional[tuple]:
+                     settings: ConversionSettings,
+                     export_settings: Optional[ExportSettings] = None) -> Optional[tuple]:
         parser = None
         try:
             parser = PdfParser(pdf_item.file_path)
@@ -323,6 +354,15 @@ class ConversionManager:
                 return None
 
             output_img = ImageConverter.convert_color_space(output_img, settings.color_space)
+
+            if export_settings:
+                output_img = ImageProcessor.process_full_pipeline(
+                    output_img,
+                    filter_chain=export_settings.filter_chain,
+                    crop_settings=export_settings.crop_settings,
+                    watermark_settings=export_settings.watermark_settings
+                )
+
             output_img = ImageConverter.prepare_for_format(output_img, settings.output_format)
 
             return (original_img, output_img)
@@ -672,6 +712,13 @@ class ConversionManager:
 
             stitched = ImageConverter.convert_color_space(
                 stitched, conversion_settings.color_space
+            )
+
+            stitched = ImageProcessor.process_full_pipeline(
+                stitched,
+                filter_chain=export_settings.filter_chain,
+                crop_settings=export_settings.crop_settings,
+                watermark_settings=export_settings.watermark_settings
             )
 
             first_name = os.path.splitext(first_pdf.file_name)[0]
