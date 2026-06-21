@@ -17,7 +17,7 @@ from ui.password_dialog import PasswordDialog
 
 from core.conversion_manager import (
     ConversionManager, ConversionTask, PdfItem,
-    ConversionSettings, ExportSettings, StitchSettings
+    ConversionSettings, ExportSettings, StitchSettings, OutputMode
 )
 from core.image_converter import format_file_size, OutputInfo
 from core.pdf_parser import PdfMetadata
@@ -29,9 +29,10 @@ class ConversionWorker(QThread):
     finished_all = pyqtSignal(list)
     error = pyqtSignal(str)
 
-    def __init__(self, tasks: list, parent=None):
+    def __init__(self, tasks: list, cross_file: bool = False, parent=None):
         super().__init__(parent)
         self.tasks = tasks
+        self.cross_file = cross_file
         self.manager = ConversionManager()
         self._canceled = False
 
@@ -39,18 +40,30 @@ class ConversionWorker(QThread):
         results = []
         total = len(self.tasks)
 
-        for i, task in enumerate(self.tasks):
-            if self._canceled:
-                break
+        if self.cross_file and total > 0:
+            first_task = self.tasks[0]
+            self.current_file.emit(f"跨文件拼接（共 {total} 个文件）")
 
-            self.current_file.emit(task.pdf_item.file_name)
+            def on_cross_progress(p):
+                self.progress.emit(int(p))
 
-            def on_progress(p, task_idx=i, total_tasks=total):
-                overall = (task_idx + p / 100.0) / total_tasks * 100
-                self.progress.emit(int(overall))
-
-            result = self.manager.convert_single(task, on_progress)
+            result = self.manager.convert_cross_file_long_image(
+                self.tasks, on_cross_progress
+            )
             results.append(result)
+        else:
+            for i, task in enumerate(self.tasks):
+                if self._canceled:
+                    break
+
+                self.current_file.emit(task.pdf_item.file_name)
+
+                def on_progress(p, task_idx=i, total_tasks=total):
+                    overall = (task_idx + p / 100.0) / total_tasks * 100
+                    self.progress.emit(int(overall))
+
+                result = self.manager.convert_single(task, on_progress)
+                results.append(result)
 
         self.progress.emit(100)
         self.finished_all.emit(results)
@@ -391,10 +404,14 @@ class MainWindow(QMainWindow):
             self.tab_widget.setCurrentIndex(1)
             return
 
-        if self._stitch_settings.enabled:
+        stitch_enabled = self._stitch_settings.enabled
+        stitch_mode = self._stitch_settings.mode
+
+        if stitch_enabled:
             all_warnings = []
             manager = ConversionManager()
-            for item in pdf_items:
+
+            if stitch_mode == OutputMode.CROSS_FILE_LONG_IMAGE:
                 export_settings = ExportSettings(
                     output_dir=self._export_settings.output_dir,
                     naming_template=self._export_settings.naming_template,
@@ -402,12 +419,36 @@ class MainWindow(QMainWindow):
                     create_subfolder=self._export_settings.create_subfolder,
                     stitch_settings=self._stitch_settings
                 )
-                size_info = manager.estimate_stitch_size(
-                    item, self._conversion_settings, export_settings
+                size_info = manager.estimate_cross_file_stitch_size(
+                    pdf_items, self._conversion_settings, export_settings
                 )
                 if size_info and size_info["warnings"]:
                     for warning in size_info["warnings"]:
-                        all_warnings.append(f"• {item.file_name}: {warning}")
+                        all_warnings.append(f"• 跨文件拼接: {warning}")
+                    if size_info.get("files"):
+                        all_warnings.append(
+                            f"  涉及 {size_info['files']} 个文件，共 {size_info['pages']} 页"
+                        )
+            else:
+                for item in pdf_items:
+                    export_settings = ExportSettings(
+                        output_dir=self._export_settings.output_dir,
+                        naming_template=self._export_settings.naming_template,
+                        page_range=self._export_settings.page_range,
+                        create_subfolder=self._export_settings.create_subfolder,
+                        stitch_settings=self._stitch_settings
+                    )
+                    if stitch_mode == OutputMode.THUMBNAIL_GRID:
+                        size_info = manager.estimate_grid_size(
+                            item, self._conversion_settings, export_settings
+                        )
+                    else:
+                        size_info = manager.estimate_stitch_size(
+                            item, self._conversion_settings, export_settings
+                        )
+                    if size_info and size_info["warnings"]:
+                        for warning in size_info["warnings"]:
+                            all_warnings.append(f"• {item.file_name}: {warning}")
 
             if all_warnings:
                 msg = "以下文件可能存在转换问题：\n\n" + "\n".join(all_warnings)
@@ -432,7 +473,8 @@ class MainWindow(QMainWindow):
             task = ConversionTask(item, self._conversion_settings, export_settings)
             tasks.append(task)
 
-        self._worker = ConversionWorker(tasks)
+        is_cross_file = stitch_enabled and stitch_mode == OutputMode.CROSS_FILE_LONG_IMAGE
+        self._worker = ConversionWorker(tasks, cross_file=is_cross_file)
         self._worker.progress.connect(self._on_progress)
         self._worker.current_file.connect(self._on_current_file)
         self._worker.finished_all.connect(self._on_finished_all)

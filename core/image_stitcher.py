@@ -178,3 +178,73 @@ class ImageStitcher:
             x_offset += img.width + gap
 
         return result
+
+    @staticmethod
+    def create_grid(images: List[Image.Image],
+                    columns: int = 3,
+                    gap: int = 10,
+                    bg_color: BackgroundColor = BackgroundColor.WHITE,
+                    cell_width: int = 0) -> Image.Image:
+        if not images:
+            raise ValueError("No images to create grid")
+
+        if columns < 1:
+            columns = 1
+
+        converted_images = ImageStitcher._normalize_alpha(images, bg_color)
+
+        if cell_width and cell_width > 0:
+            resized = []
+            for img in converted_images:
+                ratio = cell_width / img.width
+                new_height = max(1, int(img.height * ratio))
+                resized.append(img.resize((cell_width, new_height), Image.LANCZOS))
+            converted_images = resized
+
+        num_images = len(converted_images)
+        num_rows = (num_images + columns - 1) // columns
+
+        col_widths = [0] * columns
+        row_heights = [0] * num_rows
+
+        for idx, img in enumerate(converted_images):
+            col = idx % columns
+            row = idx // columns
+            if img.width > col_widths[col]:
+                col_widths[col] = img.width
+            if img.height > row_heights[row]:
+                row_heights[row] = img.height
+
+        total_width = sum(col_widths) + gap * (columns - 1)
+        total_height = sum(row_heights) + gap * (num_rows - 1)
+
+        has_alpha = bg_color == BackgroundColor.TRANSPARENT
+        if has_alpha:
+            mode = "RGBA"
+            bg_tuple = bg_color.get_rgba()
+        else:
+            mode = "RGB"
+            bg_tuple = bg_color.get_rgb()
+
+        result = Image.new(mode, (total_width, total_height), bg_tuple)
+
+        y_offsets = [0] * num_rows
+        cumulative = 0
+        for r in range(num_rows):
+            y_offsets[r] = cumulative
+            cumulative += row_heights[r] + gap
+
+        x_offsets = [0] * columns
+        cumulative = 0
+        for c in range(columns):
+            x_offsets[c] = cumulative
+            cumulative += col_widths[c] + gap
+
+        for idx, img in enumerate(converted_images):
+            col = idx % columns
+            row = idx // columns
+            x = x_offsets[col] + (col_widths[col] - img.width) // 2
+            y = y_offsets[row] + (row_heights[row] - img.height) // 2
+            result.paste(img, (x, y))
+
+        return result
