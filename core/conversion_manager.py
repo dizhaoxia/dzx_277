@@ -105,6 +105,7 @@ class ConversionManager:
                        progress_callback: Optional[Callable[[float], None]] = None
                        ) -> ConversionResult:
         result = ConversionResult(pdf_item=task.pdf_item, success=False)
+        parser = None
 
         try:
             parser = PdfParser(task.pdf_item.file_path)
@@ -115,7 +116,6 @@ class ConversionManager:
 
             if not parser.metadata or not parser.metadata.is_valid:
                 result.error_message = parser.metadata.error_message if parser.metadata else "无效的PDF文件"
-                parser.close()
                 task.result = result
                 return result
 
@@ -126,7 +126,6 @@ class ConversionManager:
 
             if not pages_to_export:
                 result.error_message = "没有可导出的页面"
-                parser.close()
                 task.result = result
                 return result
 
@@ -139,7 +138,6 @@ class ConversionManager:
             for i, page_num in enumerate(pages_to_export):
                 if task.is_canceled:
                     result.error_message = "已取消"
-                    parser.close()
                     task.result = result
                     return result
 
@@ -240,11 +238,17 @@ class ConversionManager:
                 result.output_infos.append(info)
                 result.total_size += info.file_size
 
-            parser.close()
             result.success = True
 
         except Exception as e:
             result.error_message = str(e)
+
+        finally:
+            if parser is not None:
+                try:
+                    parser.close()
+                except Exception:
+                    pass
 
         if progress_callback:
             progress_callback(100.0)
@@ -256,28 +260,34 @@ class ConversionManager:
                      pdf_item: PdfItem,
                      page_num: int,
                      dpi: int = 150) -> Optional[Image.Image]:
+        parser = None
         try:
             parser = PdfParser(pdf_item.file_path)
             if not parser.open(pdf_item.password):
                 return None
 
             img = parser.get_page_image(page_num, dpi=dpi)
-            parser.close()
             return img
         except Exception:
             return None
+        finally:
+            if parser is not None:
+                try:
+                    parser.close()
+                except Exception:
+                    pass
 
     def preview_converted(self,
                           pdf_item: PdfItem,
                           page_num: int,
                           settings: ConversionSettings) -> Optional[Image.Image]:
+        parser = None
         try:
             parser = PdfParser(pdf_item.file_path)
             if not parser.open(pdf_item.password):
                 return None
 
             img = parser.get_page_image(page_num, dpi=settings.dpi)
-            parser.close()
 
             if img is None:
                 return None
@@ -288,11 +298,18 @@ class ConversionManager:
             return img
         except Exception:
             return None
+        finally:
+            if parser is not None:
+                try:
+                    parser.close()
+                except Exception:
+                    pass
 
     def preview_both(self,
                      pdf_item: PdfItem,
                      page_num: int,
                      settings: ConversionSettings) -> Optional[tuple]:
+        parser = None
         try:
             parser = PdfParser(pdf_item.file_path)
             if not parser.open(pdf_item.password):
@@ -301,7 +318,6 @@ class ConversionManager:
             preview_dpi = min(settings.dpi, 150)
             original_img = parser.get_page_image(page_num, dpi=preview_dpi)
             output_img = parser.get_page_image(page_num, dpi=preview_dpi)
-            parser.close()
 
             if original_img is None or output_img is None:
                 return None
@@ -312,6 +328,12 @@ class ConversionManager:
             return (original_img, output_img)
         except Exception:
             return None
+        finally:
+            if parser is not None:
+                try:
+                    parser.close()
+                except Exception:
+                    pass
 
     def estimate_stitch_size(self,
                              pdf_item: PdfItem,
@@ -322,70 +344,70 @@ class ConversionManager:
                 return None
 
             parser = PdfParser(pdf_item.file_path)
-            if not parser.open(pdf_item.password):
-                return None
+            try:
+                if not parser.open(pdf_item.password):
+                    return None
 
-            total_pages = parser.page_count
-            pages_to_export = PageRangeParser.parse(
-                export_settings.page_range, total_pages
-            )
+                total_pages = parser.page_count
+                pages_to_export = PageRangeParser.parse(
+                    export_settings.page_range, total_pages
+                )
 
-            if not pages_to_export:
+                if not pages_to_export:
+                    return None
+
+                dpi = conversion_settings.dpi
+                stitch_settings = export_settings.stitch_settings
+                gap = stitch_settings.gap
+
+                widths = []
+                heights = []
+                for page_num in pages_to_export:
+                    w_pt, h_pt = parser.get_page_size_pt(page_num - 1)
+                    w_px = int(w_pt / 72 * dpi)
+                    h_px = int(h_pt / 72 * dpi)
+                    widths.append(w_px)
+                    heights.append(h_px)
+
+                num_pages = len(pages_to_export)
+                total_gap = gap * (num_pages - 1)
+
+                if stitch_settings.direction == StitchDirection.VERTICAL:
+                    max_width = max(widths)
+                    total_height = sum(heights) + total_gap
+                    final_width = max_width
+                    final_height = total_height
+                else:
+                    max_height = max(heights)
+                    total_width = sum(widths) + total_gap
+                    final_width = total_width
+                    final_height = max_height
+
+                max_dim = max(final_width, final_height)
+                fmt = conversion_settings.output_format
+
+                warnings = []
+                if fmt == OutputFormat.JPG and max_dim > 65000:
+                    warnings.append(
+                        f"JPG 格式最大支持 65535 像素，预估尺寸 {max_dim} 像素超出限制"
+                    )
+                if fmt == OutputFormat.WEBP and max_dim > 16383:
+                    warnings.append(
+                        f"WebP 格式最大支持 16383 像素，预估尺寸 {max_dim} 像素超出限制"
+                    )
+                if max_dim > 30000:
+                    warnings.append(
+                        f"预估尺寸过大 ({final_width}x{final_height})，可能导致保存失败或内存不足"
+                    )
+
+                return {
+                    "width": final_width,
+                    "height": final_height,
+                    "pages": num_pages,
+                    "warnings": warnings
+                }
+            finally:
                 parser.close()
-                return None
-
-            dpi = conversion_settings.dpi
-            stitch_settings = export_settings.stitch_settings
-            gap = stitch_settings.gap
-
-            widths = []
-            heights = []
-            for page_num in pages_to_export:
-                w_pt, h_pt = parser.get_page_size_pt(page_num - 1)
-                w_px = int(w_pt / 72 * dpi)
-                h_px = int(h_pt / 72 * dpi)
-                widths.append(w_px)
-                heights.append(h_px)
-
-            parser.close()
-
-            num_pages = len(pages_to_export)
-            total_gap = gap * (num_pages - 1)
-
-            if stitch_settings.direction == StitchDirection.VERTICAL:
-                max_width = max(widths)
-                total_height = sum(heights) + total_gap
-                final_width = max_width
-                final_height = total_height
-            else:
-                max_height = max(heights)
-                total_width = sum(widths) + total_gap
-                final_width = total_width
-                final_height = max_height
-
-            max_dim = max(final_width, final_height)
-            fmt = conversion_settings.output_format
-
-            warnings = []
-            if fmt == OutputFormat.JPG and max_dim > 65000:
-                warnings.append(
-                    f"JPG 格式最大支持 65535 像素，预估尺寸 {max_dim} 像素超出限制"
-                )
-            if fmt == OutputFormat.WEBP and max_dim > 16383:
-                warnings.append(
-                    f"WebP 格式最大支持 16383 像素，预估尺寸 {max_dim} 像素超出限制"
-                )
-            if max_dim > 30000:
-                warnings.append(
-                    f"预估尺寸过大 ({final_width}x{final_height})，可能导致保存失败或内存不足"
-                )
-
-            return {
-                "width": final_width,
-                "height": final_height,
-                "pages": num_pages,
-                "warnings": warnings
-            }
 
         except Exception:
             return None
@@ -401,78 +423,78 @@ class ConversionManager:
                 return None
 
             parser = PdfParser(pdf_item.file_path)
-            if not parser.open(pdf_item.password):
-                return None
+            try:
+                if not parser.open(pdf_item.password):
+                    return None
 
-            total_pages = parser.page_count
-            pages_to_export = PageRangeParser.parse(
-                export_settings.page_range, total_pages
-            )
+                total_pages = parser.page_count
+                pages_to_export = PageRangeParser.parse(
+                    export_settings.page_range, total_pages
+                )
 
-            if not pages_to_export:
+                if not pages_to_export:
+                    return None
+
+                dpi = conversion_settings.dpi
+                grid_settings = export_settings.stitch_settings.grid_settings
+                columns = grid_settings.columns
+                gap = grid_settings.gap
+                cell_width = grid_settings.cell_width
+
+                col_widths = [0] * columns
+                row_heights = []
+                current_row_heights = []
+
+                for idx, page_num in enumerate(pages_to_export):
+                    w_pt, h_pt = parser.get_page_size_pt(page_num - 1)
+                    w_px = int(w_pt / 72 * dpi)
+                    h_px = int(h_pt / 72 * dpi)
+
+                    if cell_width and cell_width > 0:
+                        ratio = cell_width / w_px
+                        w_px = cell_width
+                        h_px = max(1, int(h_px * ratio))
+
+                    col = idx % columns
+                    if w_px > col_widths[col]:
+                        col_widths[col] = w_px
+
+                    current_row_heights.append(h_px)
+                    if (idx + 1) % columns == 0 or idx == len(pages_to_export) - 1:
+                        row_heights.append(max(current_row_heights))
+                        current_row_heights = []
+
+                num_rows = len(row_heights)
+                total_width = sum(col_widths) + gap * (columns - 1)
+                total_height = sum(row_heights) + gap * (num_rows - 1)
+
+                max_dim = max(total_width, total_height)
+                fmt = conversion_settings.output_format
+
+                warnings = []
+                if fmt == OutputFormat.JPG and max_dim > 65000:
+                    warnings.append(
+                        f"JPG 格式最大支持 65535 像素，预估尺寸 {max_dim} 像素超出限制"
+                    )
+                if fmt == OutputFormat.WEBP and max_dim > 16383:
+                    warnings.append(
+                        f"WebP 格式最大支持 16383 像素，预估尺寸 {max_dim} 像素超出限制"
+                    )
+                if max_dim > 30000:
+                    warnings.append(
+                        f"预估尺寸过大 ({total_width}x{total_height})，可能导致保存失败或内存不足"
+                    )
+
+                return {
+                    "width": total_width,
+                    "height": total_height,
+                    "pages": len(pages_to_export),
+                    "columns": columns,
+                    "rows": num_rows,
+                    "warnings": warnings
+                }
+            finally:
                 parser.close()
-                return None
-
-            dpi = conversion_settings.dpi
-            grid_settings = export_settings.stitch_settings.grid_settings
-            columns = grid_settings.columns
-            gap = grid_settings.gap
-            cell_width = grid_settings.cell_width
-
-            col_widths = [0] * columns
-            row_heights = []
-            current_row_heights = []
-
-            for idx, page_num in enumerate(pages_to_export):
-                w_pt, h_pt = parser.get_page_size_pt(page_num - 1)
-                w_px = int(w_pt / 72 * dpi)
-                h_px = int(h_pt / 72 * dpi)
-
-                if cell_width and cell_width > 0:
-                    ratio = cell_width / w_px
-                    w_px = cell_width
-                    h_px = max(1, int(h_px * ratio))
-
-                col = idx % columns
-                if w_px > col_widths[col]:
-                    col_widths[col] = w_px
-
-                current_row_heights.append(h_px)
-                if (idx + 1) % columns == 0 or idx == len(pages_to_export) - 1:
-                    row_heights.append(max(current_row_heights))
-                    current_row_heights = []
-
-            parser.close()
-
-            num_rows = len(row_heights)
-            total_width = sum(col_widths) + gap * (columns - 1)
-            total_height = sum(row_heights) + gap * (num_rows - 1)
-
-            max_dim = max(total_width, total_height)
-            fmt = conversion_settings.output_format
-
-            warnings = []
-            if fmt == OutputFormat.JPG and max_dim > 65000:
-                warnings.append(
-                    f"JPG 格式最大支持 65535 像素，预估尺寸 {max_dim} 像素超出限制"
-                )
-            if fmt == OutputFormat.WEBP and max_dim > 16383:
-                warnings.append(
-                    f"WebP 格式最大支持 16383 像素，预估尺寸 {max_dim} 像素超出限制"
-                )
-            if max_dim > 30000:
-                warnings.append(
-                    f"预估尺寸过大 ({total_width}x{total_height})，可能导致保存失败或内存不足"
-                )
-
-            return {
-                "width": total_width,
-                "height": total_height,
-                "pages": len(pages_to_export),
-                "columns": columns,
-                "rows": num_rows,
-                "warnings": warnings
-            }
 
         except Exception:
             return None
@@ -497,23 +519,24 @@ class ConversionManager:
 
             for pdf_item in pdf_items:
                 parser = PdfParser(pdf_item.file_path)
-                if not parser.open(pdf_item.password):
-                    continue
+                try:
+                    if not parser.open(pdf_item.password):
+                        continue
 
-                total_pages = parser.page_count
-                pages_to_export = PageRangeParser.parse(
-                    export_settings.page_range, total_pages
-                )
+                    total_pages = parser.page_count
+                    pages_to_export = PageRangeParser.parse(
+                        export_settings.page_range, total_pages
+                    )
 
-                for page_num in pages_to_export:
-                    w_pt, h_pt = parser.get_page_size_pt(page_num - 1)
-                    w_px = int(w_pt / 72 * dpi)
-                    h_px = int(h_pt / 72 * dpi)
-                    all_widths.append(w_px)
-                    all_heights.append(h_px)
-                    total_pages_count += 1
-
-                parser.close()
+                    for page_num in pages_to_export:
+                        w_pt, h_pt = parser.get_page_size_pt(page_num - 1)
+                        w_px = int(w_pt / 72 * dpi)
+                        h_px = int(h_pt / 72 * dpi)
+                        all_widths.append(w_px)
+                        all_heights.append(h_px)
+                        total_pages_count += 1
+                finally:
+                    parser.close()
 
             if not all_widths:
                 return None
@@ -574,7 +597,7 @@ class ConversionManager:
         first_pdf = tasks[0].pdf_item
         result = ConversionResult(pdf_item=first_pdf, success=False)
         all_images = []
-        total_processed_pages = 0
+        total_processed = 0
 
         try:
             conversion_settings = tasks[0].conversion_settings
@@ -582,17 +605,18 @@ class ConversionManager:
             stitch_settings = export_settings.stitch_settings
             fmt_ext = conversion_settings.output_format.value
 
-            total_expected_pages = 0
+            total_expected = 0
             for t in tasks:
-                p = PdfParser(t.pdf_item.file_path)
+                parser = PdfParser(t.pdf_item.file_path)
                 try:
-                    if p.open(t.pdf_item.password):
-                        pages = PageRangeParser.parse(
-                            export_settings.page_range, p.page_count
+                    if parser.open(t.pdf_item.password):
+                        pdf_pages = parser.page_count
+                        pages_to_export = PageRangeParser.parse(
+                            export_settings.page_range, pdf_pages
                         )
-                        total_expected_pages += len(pages)
+                        total_expected += len(pages_to_export)
                 finally:
-                    p.close()
+                    parser.close()
 
             for task_idx, task in enumerate(tasks):
                 if task.is_canceled:
@@ -601,10 +625,10 @@ class ConversionManager:
                     return result
 
                 parser = PdfParser(task.pdf_item.file_path)
-                if not parser.open(task.pdf_item.password):
-                    continue
-
                 try:
+                    if not parser.open(task.pdf_item.password):
+                        continue
+
                     pdf_total_pages = parser.page_count
                     pages_to_export = PageRangeParser.parse(
                         export_settings.page_range, pdf_total_pages
@@ -616,9 +640,9 @@ class ConversionManager:
                             task.result = result
                             return result
 
-                        if progress_callback and total_expected_pages > 0:
-                            overall_idx = total_processed_pages + i
-                            progress = (overall_idx / total_expected_pages) * 100
+                        if progress_callback and total_expected > 0:
+                            overall_idx = total_processed + i
+                            progress = (overall_idx / total_expected) * 100
                             progress_callback(progress)
 
                         img = parser.get_page_image(
@@ -629,7 +653,7 @@ class ConversionManager:
                         if img is not None:
                             all_images.append(img)
 
-                    total_processed_pages += len(pages_to_export)
+                    total_processed += len(pages_to_export)
                 finally:
                     parser.close()
 
