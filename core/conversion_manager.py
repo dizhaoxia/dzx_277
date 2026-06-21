@@ -574,13 +574,25 @@ class ConversionManager:
         first_pdf = tasks[0].pdf_item
         result = ConversionResult(pdf_item=first_pdf, success=False)
         all_images = []
-        total_pages = 0
+        total_processed_pages = 0
 
         try:
             conversion_settings = tasks[0].conversion_settings
             export_settings = tasks[0].export_settings
             stitch_settings = export_settings.stitch_settings
             fmt_ext = conversion_settings.output_format.value
+
+            total_expected_pages = 0
+            for t in tasks:
+                p = PdfParser(t.pdf_item.file_path)
+                try:
+                    if p.open(t.pdf_item.password):
+                        pages = PageRangeParser.parse(
+                            export_settings.page_range, p.page_count
+                        )
+                        total_expected_pages += len(pages)
+                finally:
+                    p.close()
 
             for task_idx, task in enumerate(tasks):
                 if task.is_canceled:
@@ -592,40 +604,34 @@ class ConversionManager:
                 if not parser.open(task.pdf_item.password):
                     continue
 
-                pdf_total_pages = parser.page_count
-                pages_to_export = PageRangeParser.parse(
-                    export_settings.page_range, pdf_total_pages
-                )
-
-                for i, page_num in enumerate(pages_to_export):
-                    if task.is_canceled:
-                        parser.close()
-                        result.error_message = "已取消"
-                        task.result = result
-                        return result
-
-                    if progress_callback:
-                        overall_idx = total_pages + i
-                        total_expected = sum(
-                            len(PageRangeParser.parse(export_settings.page_range, PdfParser(t.pdf_item.file_path).page_count))
-                            if PdfParser(t.pdf_item.file_path).open(t.pdf_item.password)
-                            else 0
-                            for t in tasks
-                        )
-                        if total_expected > 0:
-                            progress = (overall_idx / total_expected) * 100
-                            progress_callback(progress)
-
-                    img = parser.get_page_image(
-                        page_num - 1,
-                        dpi=conversion_settings.dpi
+                try:
+                    pdf_total_pages = parser.page_count
+                    pages_to_export = PageRangeParser.parse(
+                        export_settings.page_range, pdf_total_pages
                     )
 
-                    if img is not None:
-                        all_images.append(img)
+                    for i, page_num in enumerate(pages_to_export):
+                        if task.is_canceled:
+                            result.error_message = "已取消"
+                            task.result = result
+                            return result
 
-                total_pages += len(pages_to_export)
-                parser.close()
+                        if progress_callback and total_expected_pages > 0:
+                            overall_idx = total_processed_pages + i
+                            progress = (overall_idx / total_expected_pages) * 100
+                            progress_callback(progress)
+
+                        img = parser.get_page_image(
+                            page_num - 1,
+                            dpi=conversion_settings.dpi
+                        )
+
+                        if img is not None:
+                            all_images.append(img)
+
+                    total_processed_pages += len(pages_to_export)
+                finally:
+                    parser.close()
 
             if not all_images:
                 result.error_message = "没有可导出的页面"
