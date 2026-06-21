@@ -64,13 +64,21 @@ class ImageConverter:
                         img = img.convert("RGB")
                 except Exception:
                     img = img.convert("RGB")
-            elif img.mode in ("RGBA", "LA", "PA"):
-                background = Image.new("RGB", img.size, (255, 255, 255))
-                if img.mode == "RGBA":
-                    background.paste(img, mask=img.split()[3])
-                else:
-                    background.paste(img, mask=img.split()[1])
-                img = background
+            elif img.mode == "RGBA":
+                try:
+                    srgb_profile = cls._get_srgb_profile()
+                    if srgb_profile:
+                        r, g, b, a = img.split()
+                        rgb_img = Image.merge("RGB", (r, g, b))
+                        rgb_img = ImageCms.profileToProfile(rgb_img, "sRGB", srgb_profile, outputMode="RGB")
+                        r2, g2, b2 = rgb_img.split()
+                        img = Image.merge("RGBA", (r2, g2, b2, a))
+                    else:
+                        pass
+                except Exception:
+                    pass
+            elif img.mode in ("LA", "PA"):
+                pass
             elif img.mode != "RGB":
                 img = img.convert("RGB")
 

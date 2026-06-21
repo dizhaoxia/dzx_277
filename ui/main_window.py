@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QProgressBar, QLabel, QMessageBox, QTabWidget,
     QStatusBar, QListWidget, QListWidgetItem, QFileDialog
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QIcon, QColor
 
 from ui.import_panel import ImportPanel
@@ -75,6 +75,11 @@ class MainWindow(QMainWindow):
         self._current_page = 1
         self._worker: Optional[ConversionWorker] = None
         self._pending_encrypted_files: list = []
+
+        self._preview_timer = QTimer(self)
+        self._preview_timer.setSingleShot(True)
+        self._preview_timer.setInterval(200)
+        self._preview_timer.timeout.connect(self._do_update_preview)
 
         self._init_ui()
         self._connect_signals()
@@ -260,12 +265,13 @@ class MainWindow(QMainWindow):
     def _on_current_pdf_changed(self, pdf_item: PdfItem):
         self._current_pdf = pdf_item
         self._current_page = 1
+        self._preview_timer.stop()
 
         if pdf_item and pdf_item.metadata and pdf_item.is_loaded:
             self.settings_panel.set_current_metadata(pdf_item.metadata)
             total_pages = pdf_item.metadata.total_pages
             self.preview_panel.set_page_info(1, total_pages)
-            self._update_preview()
+            self._do_update_preview()
         else:
             self.settings_panel.set_current_metadata(None)
             self.preview_panel.set_images(None, None)
@@ -323,27 +329,31 @@ class MainWindow(QMainWindow):
 
     def _on_stitch_settings_changed(self, settings: StitchSettings):
         self._stitch_settings = settings
+        if self._current_pdf and self._current_pdf.is_loaded:
+            self._update_preview()
 
     def _on_page_changed(self, page: int):
         self._current_page = page
-        self._update_preview()
+        self._do_update_preview()
 
     def _update_preview(self):
+        self._preview_timer.start()
+
+    def _do_update_preview(self):
         if not self._current_pdf or not self._current_pdf.is_loaded:
             return
 
         manager = ConversionManager()
 
-        preview_dpi = min(self._conversion_settings.dpi, 300)
-
-        original_img = manager.preview_page(
-            self._current_pdf, self._current_page - 1, dpi=preview_dpi
-        )
-
-        output_img = manager.preview_converted(
+        result = manager.preview_both(
             self._current_pdf, self._current_page - 1,
             self._conversion_settings
         )
+
+        if result is None:
+            return
+
+        original_img, output_img = result
 
         output_info = None
         if output_img:

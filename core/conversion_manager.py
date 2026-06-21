@@ -136,13 +136,13 @@ class ConversionManager:
                 if img is None:
                     continue
 
-                img = ImageConverter.convert_color_space(
-                    img, task.conversion_settings.color_space
-                )
-
                 if stitch_enabled:
                     stitch_images.append(img)
                 else:
+                    img = ImageConverter.convert_color_space(
+                        img, task.conversion_settings.color_space
+                    )
+
                     file_name = NamingTemplate.generate(
                         task.export_settings.naming_template,
                         task.pdf_item.file_name,
@@ -177,6 +177,10 @@ class ConversionManager:
                     bg_color=task.export_settings.stitch_settings.bg_color,
                     width_strategy=task.export_settings.stitch_settings.width_strategy,
                     height_strategy=task.export_settings.stitch_settings.height_strategy
+                )
+
+                stitched = ImageConverter.convert_color_space(
+                    stitched, task.conversion_settings.color_space
                 )
 
                 file_name = NamingTemplate.generate(
@@ -251,6 +255,30 @@ class ConversionManager:
             img = ImageConverter.prepare_for_format(img, settings.output_format)
 
             return img
+        except Exception:
+            return None
+
+    def preview_both(self,
+                     pdf_item: PdfItem,
+                     page_num: int,
+                     settings: ConversionSettings) -> Optional[tuple]:
+        try:
+            parser = PdfParser(pdf_item.file_path)
+            if not parser.open(pdf_item.password):
+                return None
+
+            preview_dpi = min(settings.dpi, 150)
+            original_img = parser.get_page_image(page_num, dpi=preview_dpi)
+            output_img = parser.get_page_image(page_num, dpi=preview_dpi)
+            parser.close()
+
+            if original_img is None or output_img is None:
+                return None
+
+            output_img = ImageConverter.convert_color_space(output_img, settings.color_space)
+            output_img = ImageConverter.prepare_for_format(output_img, settings.output_format)
+
+            return (original_img, output_img)
         except Exception:
             return None
 

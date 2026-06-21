@@ -51,10 +51,18 @@ class ImageStitcher:
         if not images:
             raise ValueError("No images to stitch")
 
-        if len(images) == 1:
-            return images[0].copy()
-
         converted_images = ImageStitcher._normalize_alpha(images, bg_color)
+
+        if len(converted_images) == 1:
+            if bg_color == BackgroundColor.TRANSPARENT:
+                return converted_images[0].copy()
+            else:
+                img = converted_images[0]
+                mode = "RGBA" if bg_color == BackgroundColor.TRANSPARENT else "RGB"
+                bg_tuple = bg_color.get_rgba() if mode == "RGBA" else bg_color.get_rgb()
+                result = Image.new(mode, img.size, bg_tuple)
+                result.paste(img, (0, 0))
+                return result
 
         if direction == StitchDirection.VERTICAL:
             return ImageStitcher._stitch_vertical(
@@ -69,17 +77,25 @@ class ImageStitcher:
     def _normalize_alpha(images: List[Image.Image], 
                          bg_color: BackgroundColor) -> List[Image.Image]:
         result = []
+        target_rgb = bg_color.get_rgb()
+        target_rgba = bg_color.get_rgba()
+
         for img in images:
             if bg_color == BackgroundColor.TRANSPARENT:
                 if img.mode != "RGBA":
                     if "A" in img.mode:
                         img = img.convert("RGBA")
                     else:
-                        img = img.convert("RGBA")
+                        new_img = Image.new("RGBA", img.size, (0, 0, 0, 0))
+                        if img.mode == "RGB":
+                            new_img.paste(img, (0, 0))
+                        else:
+                            new_img.paste(img.convert("RGBA"), (0, 0))
+                        img = new_img
                 result.append(img)
             else:
                 if img.mode in ("RGBA", "LA", "PA"):
-                    bg = Image.new("RGB", img.size, bg_color.get_rgb())
+                    bg = Image.new("RGB", img.size, target_rgb)
                     if img.mode == "RGBA":
                         bg.paste(img, mask=img.split()[3])
                     elif img.mode == "LA":
